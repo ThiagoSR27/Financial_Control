@@ -46,6 +46,7 @@ class AccountHistory(models.Model):
     
     account = models.ForeignKey(Account, related_name='history', on_delete=models.CASCADE)
     value = models.DecimalField(max_digits=12, decimal_places=2, help_text="Saldo Atual")
+    operation_value = models.DecimalField(max_digits=12, decimal_places = 2, default = 0)
     date = models.DateField()
     type = models.CharField(max_length=1, choices=TYPE_CHOICES)
     description = models.CharField(max_length=255, blank=True, null=True)

@@ -5,24 +5,37 @@ from rest_framework import status
 from django.db.models import Sum, Subquery, OuterRef, F, Window, DecimalField, ExpressionWrapper, Prefetch
 from django.db.models.functions import Lag, Coalesce
 from datetime import date
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.filters import OrderingFilter
 from .models import Category, Transaction,Account, AccountHistory
 from .serializers import CategorySerializer, TransactionSerializer, AccountSerializer, AccountHistorySerializer
+from .filters import TransactionFilter
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+    pagination_class = StandardResultsSetPagination
     
 class TransactionViewSet(viewsets.ModelViewSet):
     queryset = Transaction.objects.all()
     serializer_class = TransactionSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = TransactionFilter
+    pagination_class = StandardResultsSetPagination
     
     @action(detail=False, methods=['get'])
     def dashboard(self, request):
-        #soma do total das receitas(caregory__type='R')
-        total_income = Transaction.objects.filter(category__type='R').aggregate(Sum('value'))['value__sum'] or 0
+        # Aplica os filtros da requisição (ex: data, categoria) ao queryset
+        filtered_queryset = self.filter_queryset(self.get_queryset())
         
-        #soma do total das despesas(category__type='D')
-        total_expense = Transaction.objects.filter(category__type='D').aggregate(Sum('value'))['value__sum'] or 0
+        total_income = filtered_queryset.filter(category__type='R').aggregate(Sum('value'))['value__sum'] or 0
+        total_expense = filtered_queryset.filter(category__type='D').aggregate(Sum('value'))['value__sum'] or 0
         
         return Response({
             'income': total_income,
@@ -34,6 +47,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
 class AccountViewSet(viewsets.ModelViewSet):
     queryset= Account.objects.filter(is_active=True)
     serializer_class = AccountSerializer
+    pagination_class = StandardResultsSetPagination
     
     def get_queryset(self):
         """Permite que ações específicas encontrem contas inativas."""
@@ -76,6 +90,7 @@ class AccountViewSet(viewsets.ModelViewSet):
         AccountHistory.objects.create(
             account=account,
             value=0,
+            operation_value=0,
             type = 'E',
             date=date.today(),
             description='Encerramento de conta'
@@ -94,7 +109,14 @@ class AccountViewSet(viewsets.ModelViewSet):
         account.is_active = True
         account.save()
         
-        AccountHistory.objects.create(account=account, value = 0, type='V', date=date.today(), description='Reativação de conta')
+        AccountHistory.objects.create(
+            account=account, 
+            value = 0, 
+            operation_value = 0,
+            type='V', 
+            date=date.today(),
+            description='Reativação de conta'
+        )
         
         return Response({'status': f'A conta "{account.name}" foi reativada com sucesso.'}, status=status.HTTP_200_OK)
     
@@ -109,7 +131,11 @@ class AccountHistoryViewSet(viewsets.ModelViewSet):
         )
     ).annotate(
         calculated_variation=ExpressionWrapper(F('value') - F('previous_value'), output_field=DecimalField(max_digits=12, decimal_places=2))
-    ).order_by('-date', '-id')
+    )
     
     serializer_class = AccountHistorySerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = ['account', 'type', 'date']
+    Ordering_fields = ['date', ('value', 'operation_value'), ('end_value', 'value')]
+    ordering = ['-date', '-id']
+    pagination_class = StandardResultsSetPagination

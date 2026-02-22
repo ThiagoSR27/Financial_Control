@@ -17,18 +17,21 @@ class TransactionSerializer(serializers.ModelSerializer):
         fields = ['id', 'description', 'value', 'date', 'category', 'category_name']
         
 class AccountHistorySerializer(serializers.ModelSerializer):
+    value = serializers.DecimalField(source='operation_value', max_digits=12, decimal_places=2)
+    end_value = serializers.DecimalField(source='value', max_digits=12, decimal_places=2, read_only=True)
     monthly_variation = serializers.DecimalField(source='calculated_variation', max_digits=12, decimal_places=2, read_only=True)
     account_name = serializers.CharField(source='account.name', read_only=True)
     
     class Meta:
         model = AccountHistory
-        fields = ['id', 'account', 'account_name', 'value', 'type', 'date', 'monthly_variation', 'description']
+        fields = ['id', 'account', 'account_name', 'value', 'end_value', 'type', 'date', 'monthly_variation', 'description']
     
     def validate(self, data):
         
         if not self.instance:
             account = data.get('account')
-            value = data.get('value')
+            #value = data.get('value')
+            operation_value = data.get('operation_value')
             type_ = data.get('type')
             
             if not account.is_active:
@@ -40,11 +43,11 @@ class AccountHistorySerializer(serializers.ModelSerializer):
             if type_ == 'I':
                 raise serializers.ValidationError({"type": "O tipo 'Início' (I) não pode ser criado manualmente. Ele é gerado automaticamente ao criar uma nova conta com um saldo inicial."})
 
-            if type_ =='W' and value >= 0:
-                raise serializers.ValidationError({"value": f"Para retiradas (W), o valor deve ser negativo. Valor enviado: {value}"})
+            if type_ =='W' and operation_value >= 0:
+                raise serializers.ValidationError({"value": f"Para retiradas (W), o valor deve ser negativo. Valor enviado: {operation_value}"})
             
-            if type_ in ['A', 'R'] and value < 0:
-                raise serializers.ValidationError({"value": f"Para Aportes (A) e Rendimentos (R), o valor deve ser positivo. Valor enviado: {value}"})
+            if type_ in ['A', 'R'] and operation_value <= 0:
+                raise serializers.ValidationError({"value": f"Para Aportes (A) e Rendimentos (R), o valor deve ser positivo. Valor enviado: {operation_value}"})
             
             if type_ == 'E':
                 raise serializers.ValidationError({"type": "Para encerrar uma conta, utilize o endpoint específico: POST /api/accounts/{id}/close/"})
@@ -53,7 +56,7 @@ class AccountHistorySerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"type": "Para reativar uma conta, utilize o endpoint específico: POST /api/accounts/{id}/reactivate/"})
             
             
-            new_balance = current_balance + value
+            new_balance = current_balance + operation_value
             
             if new_balance < 0:
                 raise serializers.ValidationError({"value": "Saldo insuficiente. Saldo atual: R${:.2f}".format(current_balance)})
@@ -112,5 +115,13 @@ class AccountSerializer(serializers.ModelSerializer):
         account = Account.objects.create(**validated_data)
         
         if initial_value:
-            AccountHistory.objects.create(account=account, value=initial_value, type='I', date=date.today(), description='Saldo Inicial')
+            #AccountHistory.objects.create(account=account, value=initial_value, type='I', date=date.today(), description='Saldo Inicial')
+            AccountHistory.objects.create(
+                account=account,
+                value = initial_value, #saldo final
+                operation_value = initial_value, #valor da operação
+                type='I',
+                date = date.today(),
+                description='Saldo Inicial'
+            )
         return account
