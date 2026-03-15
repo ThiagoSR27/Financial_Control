@@ -1,7 +1,28 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
+from django.contrib.auth.models import User
 from .models import Category, Transaction,Account, AccountHistory
 from datetime import date
 
+
+class UserSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True)
+    email = serializers.EmailField(
+        required=True,
+        validators=[UniqueValidator(queryset=User.objects.all(), message="Este email já está em uso.")]
+    )
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'password', 'email']
+        
+    def create (self, validated_data):
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            password=validated_data['password'],
+            email=validated_data.get('email', '')
+        )
+        return user
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -90,19 +111,9 @@ class AccountSerializer(serializers.ModelSerializer):
         Calcula o rendimento total da conta somando as variações de todos os registros de histórico do tipo 'R' (Rendimento).
         Usa o histórico pré-carregado (prefetched) para evitar N+1 queries.
         """
-        # The history is prefetched and ordered by ('date', 'id') in the view's get_queryset
-        all_history = list(obj.history.all())
-
-        if not all_history:
-            return 0
-
-        total_yield = 0
-        previous_value = 0
-        for record in all_history:
-            variation = record.value - previous_value
-            if record.type == 'R':
-                total_yield += variation
-            previous_value = record.value
+        # obj.history.all() usa o cache do prefetch_related da view
+        # Soma o 'operation_value' de todos os registros de histórico do tipo 'R'
+        total_yield = sum(h.operation_value for h in obj.history.all() if h.type == 'R')
         return total_yield
 
     def validate_initial_value(self, value):

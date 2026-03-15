@@ -21,6 +21,11 @@ API Backend para controle financeiro pessoal, desenvolvida com **Django** e **Dj
   - Registro de Receitas e Despesas categorizadas.
   - Dashboard com totais de entradas, saídas e saldo.
 
+- **Segurança e Usuários:**
+  - **Autenticação via Token:** Acesso seguro aos endpoints.
+  - **Isolamento de Dados:** Usuários comuns veem apenas seus próprios dados.
+  - **Acesso Admin:** Superusuários têm acesso global para gerenciamento.
+
 - **Performance:**
   - Consultas otimizadas utilizando `prefetch_related` para evitar problemas de N+1 queries.
 
@@ -63,6 +68,20 @@ python manage.py runserver
 
 A API estará disponível em `http://127.0.0.1:8000/`.
 
+## 🔐 Autenticação
+
+A API utiliza **Token Authentication**. Com exceção do registro e login, todos os endpoints exigem que o usuário esteja autenticado.
+
+Para fazer requisições autenticadas, você deve enviar o token no cabeçalho (Header) da requisição:
+
+```http
+Authorization: Token seu_token_aqui
+```
+
+> **Nota:** Não esqueça do espaço entre a palavra `Token` e o código do token.(no postman na tela principal do projeto na aba authorization ja existe uma variavel pre configurada sendo necessario apenas inserir palavra `Token` e o token em si que foi gerado pela api )
+
+
+
 ## 📄 Paginação
 
 As respostas de listagem (GET para endpoints como `/api/accounts/`, `/api/transactions/`, etc.) são paginadas para melhorar a performance e a usabilidade. Por padrão, são retornados **10 itens por página**.
@@ -78,6 +97,30 @@ Você pode controlar a paginação usando os seguintes *query parameters*:
 ```
 
 ## 🔗 Endpoints Principais
+
+### Auth & Users
+
+| Método | Endpoint | Descrição |
+|---|---|---|
+| POST | `/api/register/` | Cria um novo usuário e retorna o token de acesso. |
+| POST | `/api/api-token-auth/` | Login: Retorna o token para um usuário existente. |
+
+**Exemplo de Payload (Registro):**
+```json
+{
+  "username": "novo_usuario",
+  "password": "senha_segura",
+  "email": "email@teste.com"
+}
+```
+
+**Exemplo de Resposta (Registro/Login):**
+```json
+{
+    "token": "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b",
+    "user": { ... }
+}
+```
 
 ### Accounts
 

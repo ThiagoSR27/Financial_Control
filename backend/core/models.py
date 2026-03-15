@@ -18,8 +18,7 @@ class Transaction(models.Model):
     value = models.DecimalField(max_digits=10, decimal_places=2)
     date = models.DateField()
     category = models.ForeignKey(Category, on_delete=models.PROTECT)
-    #Optional: Vincular a um usuario
-    #user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
 
     def __str__(self):
         return f"{self.description} - R${self.value}"
@@ -30,6 +29,7 @@ class Transaction(models.Model):
 class Account(models.Model):
     name = models.CharField(max_length=100)
     is_active = models.BooleanField(default=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     
     def __str__(self):
         return self.name

@@ -1,7 +1,10 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, permissions, generics
+from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.authtoken.models import Token
+from django.contrib.auth.models import User
 from django.db.models import Sum, Subquery, OuterRef, F, Window, DecimalField, ExpressionWrapper, Prefetch
 from django.db.models.functions import Lag, Coalesce
 from datetime import date
@@ -9,13 +12,26 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.filters import OrderingFilter
 from .models import Category, Transaction,Account, AccountHistory
-from .serializers import CategorySerializer, TransactionSerializer, AccountSerializer, AccountHistorySerializer
+from .serializers import CategorySerializer, TransactionSerializer, AccountSerializer, AccountHistorySerializer, UserSerializer
 from .filters import TransactionFilter
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
     max_page_size = 100
+    
+class RegisterView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    permission_classes = [AllowAny]
+    serializer_class = UserSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        token, created = Token.objects.get_or_create(user=user)
+        headers = self.get_success_headers(serializer.data)
+        return Response({'token': token.key, 'user': serializer.data}, status=status.HTTP_201_CREATED, headers=headers)
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
@@ -28,6 +44,15 @@ class TransactionViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_class = TransactionFilter
     pagination_class = StandardResultsSetPagination
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return Transaction.objects.all()
+        return Transaction.objects.filter(user=user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
     
     @action(detail=False, methods=['get'])
     def dashboard(self, request):
@@ -50,11 +75,17 @@ class AccountViewSet(viewsets.ModelViewSet):
     pagination_class = StandardResultsSetPagination
     
     def get_queryset(self):
-        """Permite que ações específicas encontrem contas inativas."""
-        if self.action in ['close', 'reactivate']:
+        """Filtra contas pelo usuário e permite ver inativas apenas em ações específicas ou se for admin."""
+        user = self.request.user
+        
+        if user.is_staff:
             queryset = Account.objects.all()
         else:
-            queryset = super().get_queryset()
+            queryset = Account.objects.filter(user=user)
+
+        # Se não for uma ação de gestão (close/reactivate) e não for admin, filtra apenas as ativas
+        if self.action not in ['close', 'reactivate'] and not user.is_staff:
+            queryset = queryset.filter(is_active=True)
         
         # Prefetch history in chronological order to optimize yield calculation in serializer
         return queryset.prefetch_related(
@@ -64,13 +95,16 @@ class AccountViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def total_wealth(self, request):
         """Calcula o total do patrimônio somando os saldos mais recentes de todas as contas ativas de forma otimizada."""
+        # A query agora usa self.get_queryset() para respeitar as permissões do usuário (admin vê tudo, usuário comum vê apenas o seu).
+        user_queryset = self.get_queryset()
+
         # Subquery para encontrar o valor do último histórico de cada conta (OuterRef se refere à query principal de Account)
         latest_history_value = AccountHistory.objects.filter(
             account=OuterRef('pk')
         ).order_by('-date').values('value')[:1]
 
-        # Agrega (soma) os valores anotados em uma única consulta
-        total_data = Account.objects.filter(is_active=True).annotate(
+        # Agrega (soma) os valores anotados em uma única consulta, filtrando apenas contas ativas.
+        total_data = user_queryset.filter(is_active=True).annotate(
             latest_value=Subquery(latest_history_value)
         ).aggregate(total=Sum('latest_value'))
         
@@ -81,7 +115,7 @@ class AccountViewSet(viewsets.ModelViewSet):
         """Encerra uma conta, criando um registro de encerramento no histórico com valor 0."""
         account = self.get_object()
         
-        latest_history = account.history.first()
+        latest_history = account.history.order_by('-date', '-id').first()
         current_balance = latest_history.value if latest_history else 0
         
         if current_balance !=0:
@@ -97,6 +131,9 @@ class AccountViewSet(viewsets.ModelViewSet):
         )
         
         return Response({'status': f'A conta "{account.name}" foi encerrada com sucesso.'}, status=status.HTTP_200_OK)
+    
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
     
     @action(detail=True, methods=['post'])
     def reactivate(self, request, pk=None):
@@ -121,9 +158,15 @@ class AccountViewSet(viewsets.ModelViewSet):
         return Response({'status': f'A conta "{account.name}" foi reativada com sucesso.'}, status=status.HTTP_200_OK)
     
 class AccountHistoryViewSet(viewsets.ModelViewSet):
-    #queryset = AccountHistory.objects.all()
+    queryset = AccountHistory.objects.all()
     
-    queryset = AccountHistory.objects.annotate(
+    def get_queryset(self):
+        # O filtro base deve vir antes dos annotations para performance e segurança
+        base_queryset = AccountHistory.objects.all()
+        if not self.request.user.is_staff:
+            base_queryset = base_queryset.filter(account__user=self.request.user)
+    
+        queryset = base_queryset.annotate(
         previous_value=Window(
             expression=Lag('value', default=0, output_field=DecimalField(max_digits=12, decimal_places=2)),
             partition_by=[F('account_id')],
@@ -132,10 +175,11 @@ class AccountHistoryViewSet(viewsets.ModelViewSet):
     ).annotate(
         calculated_variation=ExpressionWrapper(F('value') - F('previous_value'), output_field=DecimalField(max_digits=12, decimal_places=2))
     )
+        return queryset
     
     serializer_class = AccountHistorySerializer
     filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = ['account', 'type', 'date']
-    Ordering_fields = ['date', ('value', 'operation_value'), ('end_value', 'value')]
+    ordering_fields = ['date', ('value', 'operation_value'), ('end_value', 'value')]
     ordering = ['-date', '-id']
     pagination_class = StandardResultsSetPagination
